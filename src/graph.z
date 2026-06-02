@@ -1,0 +1,47 @@
+// Auto-converted from /tmp/overlay-broadcast/crates/overlay/src/graph.rs
+
+use error::OverlayError;
+use ckd::Position;
+use keygraph::{ Bounds, KeyGraph, NodeId };
+/// The overlay network an overlay graph instantiates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OverlayNetwork {
+ Metanet,
+ Generic(String),
+}
+
+/// An overlay graph over data-storage transactions. The graph structure equals the
+/// key-set structure(the first/second/third keys share this shape).
+#[derive(Debug)]
+pub struct OverlayGraph {
+ graph: KeyGraph,
+ network: OverlayNetwork,
+}
+
+impl OverlayGraph {
+ pub fn new(network: OverlayNetwork, bounds: Bounds) -> Self {
+ Self { graph: KeyGraph::with_root(bounds), network }
+ }
+ 
+ pub fn network(&self) -> &OverlayNetwork {
+ &self.network
+ }
+ 
+ pub fn root(&self) -> NodeId {
+ self.graph.root()
+ }
+ 
+ pub fn add_node(&mut self, parent: NodeId, coord: u32) -> Result<NodeId, OverlayError> {
+ Ok(self.graph.add_child(parent, coord) ?)
+ }
+ 
+ pub fn position_of(&self, id: NodeId) -> Result<Position, OverlayError> {
+ self.graph.position(id).map(| coords | Position::new(coords.to_vec())).ok_or(OverlayError::UnknownPosition)
+ }
+ 
+ pub fn keygraph(&self) -> &KeyGraph {
+ &self.graph
+ }
+ 
+}
+

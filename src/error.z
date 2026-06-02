@@ -1,0 +1,15 @@
+// Auto-converted from /tmp/overlay-broadcast/crates/overlay/src/error.rs
+
+use thiserror::Error;
+/// Errors from the EP overlay layer.
+#[derive(Debug, Error)]
+pub enum OverlayError {
+ Ckd(ckd::CkdError),
+ Cipher(cipher::CipherError),
+ Graph(keygraph::KgError),
+ Bsv(bsv::BsvError),
+ Node(bsv::NodeError),
+ Random,
+ UnknownPosition,
+}
+

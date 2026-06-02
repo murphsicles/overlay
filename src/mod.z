@@ -1,0 +1,192 @@
+// Auto-converted from /tmp/overlay-broadcast/crates/overlay/src/lib.rs
+
+mod error;
+mod graph;
+mod keys;
+mod writer;
+pub use bsv::{ OfflineNodeClient, OutPoint, Txid };
+pub use ckd::Position;
+pub use error::OverlayError;
+pub use graph::{ OverlayGraph, OverlayNetwork };
+pub use keygraph::{ Bounds, NodeId };
+pub use keys::{ deobfuscate, obfuscate, resolve_key, signal_position, OverlayKeys };
+pub use writer::{ funding_output, verify_authorisation, ApplicationFunction, OverlayWriter, WritingOptions, WrittenNode };
+#[cfg(test)]
+mod tests {
+ use super::*;
+ use ckd::Seeds;
+ const MASTER: &[u8] = & [0x11u8; 32];
+ 
+ fn bounds() -> Bounds {
+ Bounds { max_depth: 8, max_breadth: 8, max_nodes: 256 }
+ }
+ 
+ #[test]
+ fn tst_ovl_001_002_graph_build() {
+ let mut metanet = OverlayGraph::new(OverlayNetwork::Metanet, bounds());
+ let root = metanet.root();
+ let a = metanet.add_node(root, 0).unwrap();
+ let a0 = metanet.add_node(a, 0).unwrap();
+ assert_eq!(metanet.position_of(a0).unwrap().coords(), & [0, 0]);
+ metanet.keygraph().verify_invariants().unwrap();
+ assert_eq!(metanet.network(), &OverlayNetwork::Metanet);
+ let mut generic = OverlayGraph::new(OverlayNetwork::Generic("acme-overlay" . into()), bounds());
+ let g0 = generic.add_node(generic.root(), 5).unwrap();
+ assert_eq!(generic.position_of(g0).unwrap().coords(), & [5]);
+ }
+ 
+ #[test]
+ fn tst_ovl_031_three_key_sets_independent() {
+ let keys = OverlayKeys::from_master(MASTER).unwrap();
+ let pos = Position::new(vec ! [2, 3]);
+ let first = keys.writing_key(&pos).unwrap();
+ let second = keys.second_key(&pos).unwrap();
+ let third = keys.third_key(&pos).unwrap();
+ assert_ne!(first.private_key_bytes(), second.private_key_bytes());
+ assert_ne!(first.private_key_bytes(), third.private_key_bytes());
+ assert_ne!(second.private_key_bytes(), third.private_key_bytes());
+ let keys2 = OverlayKeys::from_master(MASTER).unwrap();
+ assert_eq!(keys2.writing_key(&pos).unwrap().private_key_bytes(), first.private_key_bytes());
+ }
+ 
+ #[test]
+ fn tst_ovl_021a_obfuscation() {
+ let keys = OverlayKeys::from_master(MASTER).unwrap();
+ let pos = Position::new(vec ! [1]);
+ let second = keys.second_key(&pos).unwrap();
+ let payload = b"node payload content";
+ let obf = obfuscate(&second, payload).unwrap();
+ assert_eq!(deobfuscate(&second, &obf).unwrap().expose(), payload);
+ let mut bad = obf.clone();
+ if let Some(b) = bad.bytes.first_mut() { *b ^= 0xff; }
+ assert!(deobfuscate(&second, &bad).is_err());
+ let other = keys.second_key(&Position::new(vec ! [2])).unwrap();
+ assert!(deobfuscate(&other, &obf).is_err());
+ }
+ 
+ #[test]
+ fn tst_ovl_050_061_position_signalling() {
+ let seeds = Seeds::from_master(MASTER).unwrap();
+ let keys = OverlayKeys::from_seeds(Seeds::from_master(MASTER).unwrap());
+ let pos = Position::new(vec ! [4, 2]);
+ let signalled = signal_position(&pos);
+ assert_eq!(signalled, vec ! [4, 2]);
+ let writing = resolve_key(&signalled, seeds.first().expose()).unwrap();
+ assert_eq!(writing.private_key_bytes(), keys.writing_key(&pos).unwrap().private_key_bytes());
+ let second = resolve_key(&signalled, seeds.second().expose()).unwrap();
+ assert_eq!(second.private_key_bytes(), keys.second_key(&pos).unwrap().private_key_bytes());
+ }
+ 
+ #[test]
+ fn tst_ovl_051_052_seed_isolation_negative() {
+ let seeds = Seeds::from_master(MASTER).unwrap();
+ let keys = OverlayKeys::from_seeds(Seeds::from_master(MASTER).unwrap());
+ let pos = Position::new(vec ! [7]);
+ let signalled = signal_position(&pos);
+ let second = keys.second_key(&pos).unwrap();
+ let obf = obfuscate(&second, b"only the second seed can read this").unwrap();
+ let b_writing = resolve_key(&signalled, seeds.first().expose()).unwrap();
+ assert_eq!(b_writing.private_key_bytes(), keys.writing_key(&pos).unwrap().private_key_bytes());
+ assert!(deobfuscate(&b_writing, &obf).is_err(), "first-seed holder cannot de-obfuscate");
+ assert_ne!(b_writing.private_key_bytes(), second.private_key_bytes());
+ }
+ 
+ fn funding() -> OutPoint {
+ OutPoint { txid: Txid::from_display_hex(& "11" . repeat(32)).unwrap(), vout: 0 }
+ }
+ 
+ #[test]
+ fn tst_ovl_010_011_write_and_verify() {
+ let keys = OverlayKeys::from_master(MASTER).unwrap();
+ let mut writer = OverlayWriter::new(keys, OfflineNodeClient::new());
+ let pos = Position::new(vec ! [0]);
+ let opts = WritingOptions { obfuscate: true, funding_value: 5000 };
+ let node = writer.write_node(&pos, b"hello overlay", &opts, funding()).unwrap();
+ assert!(verify_authorisation(&node, 5000).unwrap(), "the writing key authorised the input");
+ let mut tampered = node.clone();
+ tampered.writing_public_key = OverlayKeys::from_master(MASTER).unwrap().writing_key(&Position::new(vec ! [1])).unwrap().public_key_compressed().unwrap();
+ assert!(! verify_authorisation(&tampered, 5000).unwrap());
+ let again = writer.write_node(&pos, b"hello overlay", &opts, funding()).unwrap();
+ assert_eq!(again.txid_display, node.txid_display);
+ }
+ 
+ #[test]
+ fn tst_ovl_021b_funding() {
+ let keys = OverlayKeys::from_master(MASTER).unwrap();
+ let pos = Position::new(vec ! [2]);
+ let funding_key = keys.second_key(&pos).unwrap();
+ let output = funding_output(&funding_key, 9999).unwrap();
+ assert_eq!(output.value, 9999);
+ let pkh = bsv::hash160(&funding_key.public_key_compressed().unwrap());
+ assert_eq!(output.locking_script, bsv::p2pkh(&pkh));
+ }
+ 
+ struct TagApp {
+ }
+ 
+ impl ApplicationFunction for TagApp {
+ fn apply(&self, node: &WrittenNode, application_key: &ckd::XPriv) -> Result<Vec<u8>, OverlayError> {
+ let mut out = node.txid_display.clone().into_bytes();
+ out.extend_from_slice(&application_key.public_key_compressed() ?);
+ Ok(out)
+ }
+ 
+ }
+ 
+ #[test]
+ fn tst_ovl_021c_application() {
+ let keys = OverlayKeys::from_master(MASTER).unwrap();
+ let mut writer = OverlayWriter::new(OverlayKeys::from_master(MASTER).unwrap(), OfflineNodeClient::new() );
+ let pos = Position::new(vec ! [3]);
+ let opts = WritingOptions { obfuscate: false, funding_value: 1000 };
+ let node = writer.write_node(&pos, b"app payload", &opts, funding()).unwrap();
+ let app_key = keys.third_key(&pos).unwrap();
+ let tag = TagApp.apply(&node, &app_key).unwrap();
+ assert!(tag.starts_with(node.txid_display.as_bytes()));
+ assert_eq!(TagApp.apply(&node, &app_key).unwrap(), tag);
+ }
+ 
+ #[test]
+ fn tst_ovl_053_topologies() {
+ let seeds = Seeds::from_master(MASTER).unwrap();
+ let keys = OverlayKeys::from_master(MASTER).unwrap();
+ let pos = Position::new(vec ! [6, 1]);
+ let signalled = signal_position(&pos);
+ let separate = resolve_key(&signalled, seeds.first().expose()).unwrap();
+ let same = keys.writing_key(&pos).unwrap();
+ assert_eq!(separate.private_key_bytes(), same.private_key_bytes());
+ }
+ 
+ #[test]
+ fn tst_ovl_054_commissioning() {
+ use secmem::SecretBytes;
+ let first_party = OverlayKeys::from_master(MASTER).unwrap();
+ let pos = Position::new(vec ! [5]);
+ let real_second = first_party.second_key(&pos).unwrap();
+ let obf = obfuscate(&real_second, b"commissioned secret").unwrap();
+ let seeds = Seeds::from_master(MASTER).unwrap();
+ let second_party = OverlayKeys::from_seeds(Seeds::from_parts(SecretBytes::from_slice(seeds.first().expose()), SecretBytes::from_slice(& [0xAAu8; 32]), SecretBytes::from_slice(& [0xBBu8; 32]) ));
+ let mut writer = OverlayWriter::new(second_party, OfflineNodeClient::new());
+ let mut blob = obf.nonce.to_vec();
+ blob.extend_from_slice(&obf.bytes);
+ let node = writer.write_node(&pos, &blob, &WritingOptions { obfuscate: false, funding_value: 1000 }, funding() ).unwrap();
+ assert!(verify_authorisation(&node, 1000).unwrap());
+ let garbage_second = writer.keys().second_key(&pos).unwrap();
+ assert!(deobfuscate(&garbage_second, &obf).is_err());
+ assert_eq!(deobfuscate(&real_second, &obf).unwrap().expose(), b"commissioned secret");
+ }
+ 
+ #[test]
+ fn tst_ovl_060_tree() {
+ let mut graph = OverlayGraph::new(OverlayNetwork::Metanet, bounds());
+ let mut writer = OverlayWriter::new(OverlayKeys::from_master(MASTER).unwrap(), OfflineNodeClient::new() );
+ let root = graph.root();
+ let a = graph.add_node(root, 0).unwrap();
+ let b = graph.add_node(root, 1).unwrap();
+ let a0 = graph.add_node(a, 0).unwrap();
+ for id in [root, a, b, a0] { let position = graph.position_of(id).unwrap(); let node = writer.write_node(&position, b"tree node", &WritingOptions { obfuscate: false, funding_value: 500 }, funding() ).unwrap(); assert!(verify_authorisation(&node, 500).unwrap()); }
+ graph.keygraph().verify_invariants().unwrap();
+ }
+ 
+}
+
