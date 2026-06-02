@@ -1,7 +1,7 @@
 // Auto-converted from /tmp/overlay-broadcast/crates/overlay/src/writer.rs
 
-use error::OverlayError;
-use keys::{ obfuscate, OverlayKeys };
+use crate::error::OverlayError;
+use crate::keys::{ obfuscate, OverlayKeys };
 use bsv::{ build_data_carrier, hash160, p2pkh, parse_script, push_data, sighash, NodeClient, OutPoint, ScriptOp, Transaction, TxIn, TxOut, SIGHASH_ALL, SIGHASH_FORKID };
 use cipher::Ciphertext;
 use ckd::{ Position, XPriv };

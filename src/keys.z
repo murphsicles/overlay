@@ -1,6 +1,6 @@
 // Auto-converted from /tmp/overlay-broadcast/crates/overlay/src/keys.rs
 
-use error::OverlayError;
+use crate::error::OverlayError;
 use cipher::{ open, seal, Ciphertext, NONCE_LEN };
 use ckd::{ Position, Seeds, XPriv };
 use hkdf::Hkdf;
